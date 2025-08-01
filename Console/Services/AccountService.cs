@@ -1,65 +1,16 @@
-/*
-
-
-the in-memory database provider does not have any concept of transaction isolation levels like READ COMMITTED for real relation database variant: 
-- Pessimistic Concurrency
-
- await using var dbTransaction = await _context.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
-  ... SaveChangesAsync()
-  await dbTransaction.CommitAsync(); 
-  ... return (true, "Withdrawal successful.");
-
-
-
-- Optimistic Concurrency
-    // Add this property in Account model
-    public byte[] RowVersion { get; set; }
-
-    // in context for concurrency token 
-    modelBuilder.Entity<Account>(entity =>
-    {    
-        ...
-        entity.Property(a => a.RowVersion).IsRowVersion(); 
-    });
-
-
-    try 
-    {
-    
-
-    }     
-    catch (DbUpdateConcurrencyException)
-    {        
-        return (false, "The transaction could not be completed because the account was modified by another user. Please try again.");
-    }
-    catch (Exception)
-    {        
-        return (false, "An unexpected error occurred.");
-    }
-
- - Hyper cache alternative (the best solution)
- GetOrAdd in-memory have this inmplementation alredy. the atomic! thread-safe!
-
-  // for example:
-    public Task<(bool Success, string Message, decimal? Balance)> GetAccountBalanceAsync(string accountNumber)
-    {
-        if (_accounts.TryGetValue(accountNumber, out var account))
-        {
-            return Task.FromResult((true, "Balance retrieved.", (decimal?)account.Balance));
-        }
-        return Task.FromResult((false, "Account not found.", (decimal?)null));
-    }
-
-*/
-
 
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 using TransactionSystem.Data;
 using TransactionSystem.Models;
 
 namespace TransactionSystem.Services;
 
-// TODO: To implement  the atomic! thread-safe! simulare to .net 9 hyper cache and GetOrAdd in-memory
+/*
+
+Example with highest, strong  and slowwest transaction level protection - Serializable
+
+*/
 public class AccountService : IAccountService
 {
     private readonly AppDbContext _context;
@@ -68,88 +19,169 @@ public class AccountService : IAccountService
     {
         _context = context;
     }
-
+ 
     public async Task<(bool Success, string Message, Account? Account)> CreateAccountAsync(string userName, string accountNumber, decimal initialBalance)
-    {
-        if (await _context.Accounts.AnyAsync(a => a.AccountNumber == accountNumber))
+    {               
+        await using var dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        try
         {
-            return (false, "An account with this number already exists.", null);
-        }
-
-        var user = new User { Name = userName, CreatedDate = DateTime.UtcNow };
-        var account = new Account
-        {
-            User = user,
-            AccountNumber = accountNumber,
-            Balance = initialBalance,
-            CreatedDate = DateTime.UtcNow
-        };
-
-        if (initialBalance > 0)
-        {
-            var initialDeposit = new Transaction
+            if (await _context.Accounts.AnyAsync(a => a.AccountNumber == accountNumber))
             {
-                Account = account,
-                Amount = initialBalance,
-                Type = TransactionType.Deposit,
-                Timestamp = DateTime.UtcNow,
-                Description = "Initial deposit"
-            };
-            _context.Transactions.Add(initialDeposit);
-        }
+                return (false, "An account with this number already exists.", null);
+            }
 
-        _context.Users.Add(user);
-        _context.Accounts.Add(account);
-        
-        await _context.SaveChangesAsync();
-        return (true, "Account created successfully.", account);
+            var user = new User { Name = userName };
+            var account = new Account
+            {
+                User = user,
+                AccountNumber = accountNumber,
+                Balance = initialBalance
+            };
+
+            if (initialBalance > 0)
+            {
+                _context.Transactions.Add(new Transaction
+                {
+                    Account = account,
+                    Amount = initialBalance,
+                    Type = TransactionType.Deposit,
+                    Description = "Initial deposit"
+                });
+            }
+
+            _context.Users.Add(user);
+          
+            
+            await _context.SaveChangesAsync();
+            await dbTransaction.CommitAsync();
+
+            return (true, "Account created successfully.", account);
+        }
+        catch (Exception ex)
+        {
+          
+            return (false, $"An unexpected database error occurred: {ex.Message}", null);
+        }
     }
 
+   
     public async Task<(bool Success, string Message)> DepositAsync(string accountNumber, decimal amount)
     {
-        var account = await _context.Accounts.FirstOrDefaultAsync(a => a.AccountNumber == accountNumber);
-        if (account == null) return (false, "Account not found.");
         if (amount <= 0) return (false, "Deposit amount must be positive.");
 
-        account.Balance += amount;
-        
-        var transaction = new Transaction
-        {
-            AccountId = account.Id,
-            Amount = amount,
-            Type = TransactionType.Deposit,
-            Timestamp = DateTime.UtcNow,
-            Description = $"Deposit of {amount:C}"
-        };
-        _context.Transactions.Add(transaction);
+        await using var dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
 
-        await _context.SaveChangesAsync();
-        return (true, "Deposit successful.");
+        try
+        {
+         
+            var account = await _context.Accounts
+                .FromSqlRaw("SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}", accountNumber)
+                .FirstOrDefaultAsync();
+
+            if (account == null) return (false, "Account not found.");
+
+            account.Balance += amount;
+            
+            _context.Transactions.Add(new Transaction
+            {
+                AccountId = account.Id,
+                Amount = amount,
+                Type = TransactionType.Deposit,
+                Description = $"Deposit of {amount:C}"
+            });
+
+            await _context.SaveChangesAsync();
+            await dbTransaction.CommitAsync();
+            
+            return (true, "Deposit successful.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"An unexpected database error occurred: {ex.Message}");
+        }
     }
 
+    
     public async Task<(bool Success, string Message)> WithdrawAsync(string accountNumber, decimal amount)
     {
-        var account = await _context.Accounts.FirstOrDefaultAsync(a => a.AccountNumber == accountNumber);
-        if (account == null) return (false, "Account not found.");
         if (amount <= 0) return (false, "Withdrawal amount must be positive.");
-        if (account.Balance < amount) return (false, "Insufficient funds.");
 
-        account.Balance -= amount;
-
-        var transaction = new Transaction
-        {
-            AccountId = account.Id,
-            Amount = amount, 
-            Type = TransactionType.Withdrawal,
-            Timestamp = DateTime.UtcNow,
-            Description = $"Withdrawal of {amount:C}"
-        };
-        _context.Transactions.Add(transaction);
+        await using var dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         
-        await _context.SaveChangesAsync();
-        return (true, "Withdrawal successful.");
+        try
+        {
+           
+            var account = await _context.Accounts
+                .FromSqlRaw("SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}", accountNumber)
+                .FirstOrDefaultAsync();
+
+            if (account == null) return (false, "Account not found.");
+            if (account.Balance < amount) return (false, "Insufficient funds.");
+
+            account.Balance -= amount;
+
+            _context.Transactions.Add(new Transaction
+            {
+                AccountId = account.Id,
+                Amount = amount, 
+                Type = TransactionType.Withdrawal,
+                Description = $"Withdrawal of {amount:C}"
+            });
+            
+            await _context.SaveChangesAsync();
+            await dbTransaction.CommitAsync();
+
+            return (true, "Withdrawal successful.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"An unexpected database error occurred: {ex.Message}");
+        }
+    }
+    
+    
+    public async Task<(bool Success, string Message)> TransferAsync(string fromAccountNumber, string toAccountNumber, decimal amount)
+    {
+        if (fromAccountNumber == toAccountNumber) return (false, "Source and destination accounts cannot be the same.");
+        if (amount <= 0) return (false, "Transfer amount must be positive.");
+
+        await using var dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        try
+        {
+           
+            var fromAccount = await _context.Accounts
+                .FromSqlRaw("SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}", fromAccountNumber)
+                .FirstOrDefaultAsync();
+                
+            var toAccount = await _context.Accounts
+                .FromSqlRaw("SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}", toAccountNumber)
+                .FirstOrDefaultAsync();
+
+            if (fromAccount == null) return (false, "Source account not found.");
+            if (toAccount == null) return (false, "Destination account not found.");
+            if (fromAccount.Balance < amount) return (false, "Insufficient funds in source account.");
+
+         
+            fromAccount.Balance -= amount;
+            toAccount.Balance += amount;
+            
+           
+            _context.Transactions.Add(new Transaction { AccountId = fromAccount.Id, Amount = amount, Type = TransactionType.Withdrawal, Description = $"Transfer to {toAccountNumber}" });
+            _context.Transactions.Add(new Transaction { AccountId = toAccount.Id, Amount = amount, Type = TransactionType.Deposit, Description = $"Transfer from {fromAccountNumber}" });
+
+            await _context.SaveChangesAsync();
+            await dbTransaction.CommitAsync();
+
+            return (true, "Transfer successful.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"An error occurred during the transfer: {ex.Message}");
+        }
     }
 
+    
     public async Task<(bool Success, string Message, decimal? Balance)> GetAccountBalanceAsync(string accountNumber)
     {
         var account = await _context.Accounts.AsNoTracking()
@@ -160,57 +192,5 @@ public class AccountService : IAccountService
         return (true, "Balance retrieved.", account.Balance);
     }
 
-    public async Task<(bool Success, string Message)> TransferAsync(string fromAccountNumber, string toAccountNumber, decimal amount)
-    {
-        if (fromAccountNumber == toAccountNumber) return (false, "Source and destination accounts cannot be the same.");
-        if (amount <= 0) return (false, "Transfer amount must be positive.");
-
-      
-        await using var dbTransaction = await _context.Database.BeginTransactionAsync();
-
-        try
-        {
-            var fromAccount = await _context.Accounts.FirstOrDefaultAsync(a => a.AccountNumber == fromAccountNumber);
-            if (fromAccount == null) return (false, "Source account not found.");
-            if (fromAccount.Balance < amount) return (false, "Insufficient funds in source account.");
-
-            var toAccount = await _context.Accounts.FirstOrDefaultAsync(a => a.AccountNumber == toAccountNumber);
-            if (toAccount == null) return (false, "Destination account not found.");
-
-          
-            fromAccount.Balance -= amount;
-            var withdrawalTx = new Transaction
-            {
-                AccountId = fromAccount.Id,
-                Amount = amount,
-                Type = TransactionType.Withdrawal,
-                Timestamp = DateTime.UtcNow,
-                Description = $"Transfer to {toAccountNumber}"
-            };
-            _context.Transactions.Add(withdrawalTx);
-
-         
-            toAccount.Balance += amount;
-            var depositTx = new Transaction
-            {
-                AccountId = toAccount.Id,
-                Amount = amount,
-                Type = TransactionType.Deposit,
-                Timestamp = DateTime.UtcNow,
-                Description = $"Transfer from {fromAccountNumber}"
-            };
-            _context.Transactions.Add(depositTx);
-
-            await _context.SaveChangesAsync();
-            await dbTransaction.CommitAsync();
-
-            return (true, "Transfer successful.");
-        }
-        catch (Exception ex)
-        {
-            await dbTransaction.RollbackAsync();
-           
-            return (false, "An error occurred during the transfer.");
-        }
-    }
+   
 }
