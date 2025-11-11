@@ -1,10 +1,7 @@
-using NUnit.Framework;
-using Microsoft.EntityFrameworkCore;
-using System;
-using System.Threading.Tasks;
 using Data;
+using Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Services;
-using Models;
 
 namespace Tests
 {
@@ -12,7 +9,7 @@ namespace Tests
     public class AccountServiceTests
     {
         private AppDbContext _context = null!;
-        private AccountService _service = null!;
+        private IAccountService _service = null!;
 
         [SetUp]
         public async Task Setup()
@@ -21,9 +18,13 @@ namespace Tests
             var options = new DbContextOptionsBuilder<AppDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString())
                 .Options;
-
+          
             _context = new AppDbContext(options);
-            _service = new AccountService(_context);
+           
+            var factory = new FactoryAccountService(_context);
+            _service = factory.Create();
+           
+            // _service = new AccountService(_context);
 
             // Seed data
             await _service.CreateAccountAsync("Alice", "123", 1000);
