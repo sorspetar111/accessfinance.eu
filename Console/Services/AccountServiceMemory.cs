@@ -3,30 +3,18 @@ using Data;
 using Enums;
 using Interfaces;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Models;
-using System.Data;
 
 namespace Services;
 
-[Obsolete("Use Factory IAccountService")]
-public class AccountService : IAccountService
+public class AccountServiceMemory : AccountServiceBase, IAccountService
 {
-    private readonly AppDbContext _context;
-
-    public AccountService(AppDbContext context)
+    public AccountServiceMemory(AppDbContext context) : base(context)
     {
-        _context = context;
     }
 
     public async Task<(bool Success, string Message, Models.Account? Account)> CreateAccountAsync(string userName, string accountNumber, decimal initialBalance)
     {
-        var isRelational = _context.Database.IsRelational();
-        IDbContextTransaction? dbTransaction = null;
-
-        if (isRelational)
-            dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-
         try
         {
             if (await _context.Accounts.AnyAsync(a => a.AccountNumber == accountNumber))
@@ -56,17 +44,10 @@ public class AccountService : IAccountService
             _context.Users.Add(user);
 
             await _context.SaveChangesAsync();
-
-            if (isRelational)
-                await dbTransaction!.CommitAsync();
-
             return (true, "Account created successfully.", account);
         }
         catch (Exception ex)
         {
-            if (isRelational && dbTransaction != null)
-                await dbTransaction.RollbackAsync();
-
             return (false, $"An unexpected database error occurred: {ex.Message}", null);
         }
     }
@@ -76,23 +57,9 @@ public class AccountService : IAccountService
         if (amount <= 0)
             return (false, "Deposit amount must be positive.");
 
-        var isRelational = _context.Database.IsRelational();
-        IDbContextTransaction? dbTransaction = null;
-
-        if (isRelational)
-            dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-
         try
         {
-            // For relational: use locking hints
-            // For in-memory: normal LINQ query
-            var accountQuery = isRelational
-                ? _context.Accounts.FromSqlRaw(
-                    "SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}",
-                    accountNumber)
-                : _context.Accounts.Where(a => a.AccountNumber == accountNumber);
-
-            var account = await accountQuery.FirstOrDefaultAsync();
+            var account = await GetAccount(accountNumber);
 
             if (account == null)
                 return (false, "Account not found.");
@@ -109,27 +76,21 @@ public class AccountService : IAccountService
 
             await _context.SaveChangesAsync();
 
-            if (isRelational)
-                await dbTransaction!.CommitAsync();
 
             return (true, "Deposit successful.");
         }
         catch (Exception ex)
         {
-            if (isRelational && dbTransaction != null)
-                await dbTransaction.RollbackAsync();
-
             return (false, $"An unexpected database error occurred: {ex.Message}");
         }
     }
 
     public async Task<(bool Success, string Message, decimal? Balance)> GetAccountBalanceAsync(string accountNumber)
     {
-        var account = await _context.Accounts.AsNoTracking()
-            .FirstOrDefaultAsync(a => a.AccountNumber == accountNumber);
+        var account = await _context.Accounts.AsNoTracking().FirstOrDefaultAsync(a => a.AccountNumber == accountNumber);
 
-        if (account == null) return (false, "Account not found.", null);
-
+        if (account == null)
+            return (false, "Account not found.", null);
         return (true, "Balance retrieved.", account.Balance);
     }
 
@@ -141,35 +102,9 @@ public class AccountService : IAccountService
         if (amount <= 0)
             return (false, "Transfer amount must be positive.");
 
-        var isRelational = _context.Database.IsRelational();
-        IDbContextTransaction? dbTransaction = null;
-
-        if (isRelational)
-            dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-
         try
         {
-            // 1. Safe way to get data depending on MSSQL server
-            /*
-            var fromQuery = isRelational
-                ? _context.Accounts.FromSqlRaw(
-                    "SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}",
-                    fromAccountNumber)
-                : _context.Accounts.Where(a => a.AccountNumber == fromAccountNumber);
-
-            var toQuery = isRelational
-                ? _context.Accounts.FromSqlRaw(
-                    "SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}",
-                    toAccountNumber)
-                : _context.Accounts.Where(a => a.AccountNumber == toAccountNumber);
-
-            var fromAccount = await fromQuery.FirstOrDefaultAsync();
-            var toAccount = await toQuery.FirstOrDefaultAsync();
-            */
-
-            // 2. This is another way to get data in safe concurent order
             var accountsTuple = await GetSafeAccounts(fromAccountNumber, toAccountNumber);
-
 
             if (accountsTuple.FromAccount == null)
                 return (false, "Source account not found.");
@@ -200,17 +135,10 @@ public class AccountService : IAccountService
             });
 
             await _context.SaveChangesAsync();
-
-            if (isRelational)
-                await dbTransaction!.CommitAsync();
-
             return (true, "Transfer successful.");
         }
         catch (Exception ex)
         {
-            if (isRelational && dbTransaction != null)
-                await dbTransaction.RollbackAsync();
-
             return (false, $"An error occurred during the transfer: {ex.Message}");
         }
     }
@@ -220,21 +148,9 @@ public class AccountService : IAccountService
         if (amount <= 0)
             return (false, "Withdrawal amount must be positive.");
 
-        var isRelational = _context.Database.IsRelational();
-        IDbContextTransaction? dbTransaction = null;
-
-        if (isRelational)
-            dbTransaction = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-
         try
         {
-            var accountQuery = isRelational
-                ? _context.Accounts.FromSqlRaw(
-                    "SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}",
-                    accountNumber)
-                : _context.Accounts.Where(a => a.AccountNumber == accountNumber);
-
-            var account = await accountQuery.FirstOrDefaultAsync();
+            var account = await GetAccount(accountNumber);
 
             if (account == null)
                 return (false, "Account not found.");
@@ -254,33 +170,12 @@ public class AccountService : IAccountService
 
             await _context.SaveChangesAsync();
 
-            if (isRelational)
-                await dbTransaction!.CommitAsync();
-
             return (true, "Withdrawal successful.");
         }
         catch (Exception ex)
         {
-            if (isRelational && dbTransaction != null)
-                await dbTransaction.RollbackAsync();
-
             return (false, $"An unexpected database error occurred: {ex.Message}");
         }
     }
-
-    private async Task<(Account? FromAccount, Account? ToAccount)> GetSafeAccounts(string fromAccountNumber, string toAccountNumber)
-    {
-        var accountNumbers = new[] { fromAccountNumber, toAccountNumber };
-
-        var accounts = await _context.Accounts.Where(a => a.AccountNumber == accountNumbers[0])
-            .Union(_context.Accounts.Where(a => a.AccountNumber == accountNumbers[1]))
-            .ToListAsync();
-
-        var fromAccount = accounts.FirstOrDefault(a => a.AccountNumber == accountNumbers[0]);
-        var toAccount = accounts.FirstOrDefault(a => a.AccountNumber == accountNumbers[1]);
-
-        return (fromAccount, toAccount);
-    }
-
 
 }
