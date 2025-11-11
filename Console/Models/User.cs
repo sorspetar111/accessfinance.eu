@@ -1,4 +1,4 @@
-namespace TransactionSystem.Models;
+namespace Models;
 
 public class User
 {

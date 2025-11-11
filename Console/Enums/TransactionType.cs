@@ -1,4 +1,4 @@
-namespace TransactionSystem.Models;
+namespace Enums;
 
 public enum TransactionType
 {

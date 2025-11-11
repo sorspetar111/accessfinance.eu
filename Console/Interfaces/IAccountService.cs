@@ -1,6 +1,6 @@
-using TransactionSystem.Models;
+using Models;
 
-namespace TransactionSystem.Services;
+namespace Interfaces;
 
 public interface IAccountService
 {

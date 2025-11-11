@@ -2,7 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 
-namespace TransactionSystem.Models;
+namespace Models;
 /*
 
 public class Account
@@ -56,8 +56,9 @@ public class Account
 
 public class Account
 {
+                
     public Guid Id { get; set; }
-    public required string AccountNumber { get; set; }
+    public /*required*/ string AccountNumber { get; set; }
     public decimal Balance { get; set; }
     public DateTime CreatedDate { get; set; }
 

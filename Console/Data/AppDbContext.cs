@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
-using TransactionSystem.Models;
+using Models;
 
-namespace TransactionSystem.Data;
+namespace Data;
 
 public class AppDbContext : DbContext
 {
@@ -9,7 +9,7 @@ public class AppDbContext : DbContext
 
     public DbSet<User> Users { get; set; }
     public DbSet<Account> Accounts { get; set; }
-    public DbSet<Transaction> Transactions { get; set; }
+    public DbSet<Models.Transaction> Transactions { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -40,7 +40,7 @@ public class AppDbContext : DbContext
         });
 
        
-        modelBuilder.Entity<Transaction>(entity =>
+        modelBuilder.Entity<Models.Transaction>(entity =>
         {
             entity.HasKey(t => t.Id);
             entity.Property(t => t.Amount).HasColumnType("decimal(18, 2)");

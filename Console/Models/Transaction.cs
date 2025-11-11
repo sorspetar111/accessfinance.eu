@@ -1,4 +1,6 @@
-namespace TransactionSystem.Models;
+using Enums;
+
+namespace Models;
 
 public class Transaction
 {
