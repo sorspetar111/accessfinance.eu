@@ -1,10 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using TransactionSystem.Data;
-using TransactionSystem.Services;
-using TransactionSystem.Models;
-
+using Services;
+using Interfaces;
+using Microsoft.Extensions.Configuration;
 
 var builder = Host.CreateApplicationBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -18,14 +17,14 @@ if (useSqlServer)
 {
 
     Console.WriteLine("Configuring application to use SQL Server.");
-    builder.Services.AddDbContext<AppDbContext>(options =>
+    builder.Services.AddDbContext<Data.AppDbContext>(options =>
         options.UseSqlServer(connectionString));
 }
 else
 {
 
     Console.WriteLine("Configuring application to use In-Memory Database.");
-    builder.Services.AddDbContext<AppDbContext>(options =>
+    builder.Services.AddDbContext<Data.AppDbContext>(options =>
         options.UseInMemoryDatabase("FallbackFinanceDb"));
 }
 
@@ -38,11 +37,11 @@ await RunConsoleApp(host.Services);
 
 static async Task RunConsoleApp(IServiceProvider services)
 {
-   
+
     using var scope = services.CreateScope();
     var accountService = scope.ServiceProvider.GetRequiredService<IAccountService>();
 
-    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var dbContext = scope.ServiceProvider.GetRequiredService<Data.AppDbContext>();
     bool isMemory = dbContext.Database.IsInMemory();
     if (isMemory)
         Console.WriteLine("In-Memory database...");
@@ -119,7 +118,7 @@ static async Task DepositMoney(IAccountService service)
 
 static async Task WithdrawMoney(IAccountService service)
 {
-     Console.Write("Enter account number: ");
+    Console.Write("Enter account number: ");
     var accountNumber = Console.ReadLine() ?? "";
     Console.Write("Enter amount to withdraw: ");
     if (decimal.TryParse(Console.ReadLine(), out var amount))
@@ -138,7 +137,7 @@ static async Task CheckAccountBalance(IAccountService service)
     Console.Write("Enter account number: ");
     var accountNumber = Console.ReadLine() ?? "";
     var (Success, Message, Balance) = await service.GetAccountBalanceAsync(accountNumber);
-    if(Success)
+    if (Success)
     {
         Console.WriteLine($"Account Balance: {Balance:C}");
     }
