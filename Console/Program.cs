@@ -4,7 +4,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
 using Services;
 using Interfaces;
-using Shell;
 
 var builder = Host.CreateApplicationBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -27,4 +26,5 @@ else
 builder.Services.AddScoped<IAccountService, AccountService>();
 
 var host = builder.Build();
+
 await ShellOperation.RunConsoleApp(host.Services);
