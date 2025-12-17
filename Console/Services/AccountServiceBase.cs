@@ -15,6 +15,7 @@ public class AccountServiceBase
         _context = context;
     }
 
+    [Obsolete("Use safe")]
     protected async Task<Account> GetAccount(string accountNumber)
     {
         return _context.Database.IsRelational() ? await _context.Accounts.FromSqlRaw("SELECT * FROM Accounts WITH (UPDLOCK, HOLDLOCK) WHERE AccountNumber = {0}", accountNumber).FirstOrDefaultAsync() : await _context.Accounts.Where(a => a.AccountNumber == accountNumber).FirstOrDefaultAsync();
@@ -55,3 +56,4 @@ public class AccountServiceBase
         return (fromAccount, toAccount);
     }
 }
+
